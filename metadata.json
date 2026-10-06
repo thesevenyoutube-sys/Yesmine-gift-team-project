@@ -1,0 +1,6 @@
+{
+  "name": "TeamHub",
+  "description": "Internal team management platform for tasks, projects, CRM client tracking, and team permissions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,185 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'agrinova.ponic@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    // Entity Validators
+    function isValidUser(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.email is string && data.email.size() <= 256 &&
+             data.name is string && data.name.size() <= 128 &&
+             (data.role == 'admin' || data.role == 'member') &&
+             (!('title' in data) || (data.title is string && data.title.size() <= 128)) &&
+             (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 512));
+    }
+
+    function isValidProject(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.name is string && data.name.size() <= 128 &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 1000)) &&
+             data.color is string && data.color.size() <= 32 &&
+             (data.status == 'active' || data.status == 'completed' || data.status == 'archived') &&
+             data.createdBy is string && data.createdBy.size() <= 128;
+    }
+
+    function isValidTask(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.projectId is string && data.projectId.size() <= 128 &&
+             data.title is string && data.title.size() <= 200 &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 2000)) &&
+             data.assigneeId is string && data.assigneeId.size() <= 128 &&
+             (data.priority == 'low' || data.priority == 'medium' || data.priority == 'high') &&
+             (data.status == 'todo' || data.status == 'doing' || data.status == 'done') &&
+             data.createdBy is string && data.createdBy.size() <= 128;
+    }
+
+    function isValidClient(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.name is string && data.name.size() <= 128 &&
+             data.company is string && data.company.size() <= 128 &&
+             (!('phone' in data) || (data.phone is string && data.phone.size() <= 64)) &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 256)) &&
+             (data.status == 'lead' || data.status == 'active' || data.status == 'closed') &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 3000)) &&
+             data.ownerId is string && data.ownerId.size() <= 128;
+    }
+
+    function isValidClientNote(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.clientId is string && data.clientId.size() <= 128 &&
+             data.content is string && data.content.size() <= 2000 &&
+             data.authorId is string && data.authorId.size() <= 128 &&
+             data.authorName is string && data.authorName.size() <= 128;
+    }
+
+    function isValidActivity(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.type is string && data.type.size() <= 64 &&
+             data.description is string && data.description.size() <= 500 &&
+             data.userId is string && data.userId.size() <= 128;
+    }
+
+    // Connection test rule
+    match /test/{docId} {
+      allow read: if true;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(userId) && isValidUser(incoming()) && (
+        request.auth.uid == userId || isAdmin()
+      ) && (
+        incoming().role == 'member' || isAdmin() || request.auth.token.email == 'agrinova.ponic@gmail.com'
+      );
+      allow update: if isSignedIn() && isValidId(userId) && isValidUser(incoming()) && (
+        isAdmin() || (request.auth.uid == userId && incoming().role == existing().role)
+      );
+      allow delete: if isAdmin() && request.auth.uid != userId;
+    }
+
+    // Admin Markers
+    match /admins/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin() || (isSignedIn() && request.auth.token.email == 'agrinova.ponic@gmail.com');
+    }
+
+    // Projects Collection
+    match /projects/{projectId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(projectId) && isValidProject(incoming());
+      allow update: if isSignedIn() && isValidId(projectId) && isValidProject(incoming()) && (
+        isAdmin() || existing().createdBy == request.auth.uid
+      );
+      allow delete: if isSignedIn() && (isAdmin() || existing().createdBy == request.auth.uid);
+    }
+
+    // Tasks Collection
+    match /tasks/{taskId} {
+      allow get: if isSignedIn() && (
+        isAdmin() || resource.data.assigneeId == request.auth.uid || resource.data.createdBy == request.auth.uid
+      );
+      allow list: if isSignedIn() && (
+        isAdmin() || resource.data.assigneeId == request.auth.uid || resource.data.createdBy == request.auth.uid
+      );
+      allow create: if isSignedIn() && isValidId(taskId) && isValidTask(incoming()) && (
+        isAdmin() || incoming().createdBy == request.auth.uid
+      );
+      allow update: if isSignedIn() && isValidId(taskId) && isValidTask(incoming()) && (
+        isAdmin() || existing().assigneeId == request.auth.uid || existing().createdBy == request.auth.uid
+      );
+      allow delete: if isSignedIn() && (
+        isAdmin() || existing().createdBy == request.auth.uid
+      );
+    }
+
+    // Clients Collection
+    match /clients/{clientId} {
+      allow get: if isSignedIn() && (
+        isAdmin() || resource.data.ownerId == request.auth.uid
+      );
+      allow list: if isSignedIn() && (
+        isAdmin() || resource.data.ownerId == request.auth.uid
+      );
+      allow create: if isSignedIn() && isValidId(clientId) && isValidClient(incoming()) && (
+        isAdmin() || incoming().ownerId == request.auth.uid
+      );
+      allow update: if isSignedIn() && isValidId(clientId) && isValidClient(incoming()) && (
+        isAdmin() || existing().ownerId == request.auth.uid
+      );
+      allow delete: if isSignedIn() && (
+        isAdmin() || existing().ownerId == request.auth.uid
+      );
+
+      // Client Notes subcollection
+      match /notes/{noteId} {
+        allow read: if isSignedIn() && (
+          isAdmin() || get(/databases/$(database)/documents/clients/$(clientId)).data.ownerId == request.auth.uid
+        );
+        allow create: if isSignedIn() && isValidId(noteId) && isValidClientNote(incoming()) && (
+          isAdmin() || get(/databases/$(database)/documents/clients/$(clientId)).data.ownerId == request.auth.uid
+        ) && incoming().authorId == request.auth.uid;
+        allow update, delete: if isSignedIn() && (
+          isAdmin() || resource.data.authorId == request.auth.uid
+        );
+      }
+    }
+
+    // Activities Collection
+    match /activities/{activityId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(activityId) && isValidActivity(incoming()) && incoming().userId == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+  }
+}
